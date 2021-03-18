@@ -11,16 +11,16 @@ import (
 )
 
 func TestInsert(t *testing.T) {
-	ring := NewRing(20)
+	ring := NewRing(11)
 	var vals []int64
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 10; i++ {
 		vals = append(vals, int64(i))
 	}
 	for i := range vals {
 		ring.Insert(int(vals[i]))
 	}
 
-	assert.ElementsMatch(t, vals, ring.arr)
+	assert.ElementsMatch(t, vals, ring.arr[0:10])
 }
 
 func TestInsertSync(t *testing.T) {
@@ -55,7 +55,8 @@ func TestRaceForArr(t *testing.T) {
 
 	wg.Wait()
 
-	fmt.Println(arr)
+	assert.Equal(t, arr[9], 1000)
+	assert.Equal(t, arr[8], 9999)
 }
 
 func TestConcurrentInsertRead(t *testing.T) {
@@ -102,23 +103,39 @@ func TestConcurrentInsertRead(t *testing.T) {
 
 	time.Sleep(time.Second)
 	mu.Lock()
-	fmt.Println("vals", len(vals), numGets)
-	fmt.Println("indexes", ring.indexr, ring.indexw)
-	fmt.Println("vals", vals)
-	fmt.Println("arr", ring.arr)
+	assert.Equal(t, uint64(len(vals)), numGets)
+	assert.Equal(t, uint64(20), ring.indexr)
+	assert.Equal(t, uint64(20), ring.indexw)
+	var valsSlice []int
+	for k := range vals {
+		valsSlice = append(valsSlice, k)
+	}
+	for i := range ring.arr {
+		assert.Equal(t, int64(-1), ring.arr[i])
+	}
 }
 
 func Test10e6Insert(t *testing.T) {
-	ring := NewRing(10000)
 	step := 10000
+	numSteps := 10
+	ring := NewRing(step)
 	var sumExpected uint64
 	var inserts uint64
-	for i := 1; i < 5; i++ {
+	for i := 1; i <= numSteps; i++ {
+		for j := (i - 1) * step; j < i*step; j++ {
+			sumExpected += uint64(j)
+			inserts++
+		}
+	}
+
+	start := time.Now()
+	var wg sync.WaitGroup
+	for i := 1; i <= numSteps; i++ {
+		wg.Add(1)
 		go func(m int) {
+			defer wg.Done()
 			for j := (m - 1) * step; j < m*step; j++ {
 				ring.Insert(j)
-				atomic.AddUint64(&sumExpected, uint64(j))
-				atomic.AddUint64(&inserts, 1)
 			}
 		}(i)
 	}
@@ -129,30 +146,38 @@ func Test10e6Insert(t *testing.T) {
 		v := ring.Get()
 		sumOut += uint64(v)
 		reads++
-		if reads == uint64(4*step) {
+		if reads == uint64(numSteps*step) {
 			break
 		}
 	}
-	time.Sleep(time.Second)
-	fmt.Println("inserts ", atomic.LoadUint64(&inserts))
-	fmt.Println("sumExp", sumExpected, " sumOut: ", sumOut, " reads:", reads)
-	fmt.Println("indexr: ", ring.indexr, " indexw: ", ring.indexw)
+	wg.Wait()
+	fmt.Println("time took:", time.Since(start).Milliseconds(), "ms")
+
+	assert.Equal(t, sumExpected, sumOut)
+	assert.Equal(t, inserts, reads)
+	assert.Equal(t, inserts, ring.indexr)
+	assert.Equal(t, inserts, ring.indexw)
 }
 
 func Test10e6InsertSync(t *testing.T) {
-	ring := NewRingSync(10000)
 	step := 10000
+	numSteps := 10
+	ring := NewRingSync(step)
+
 	var sumExpected uint64
 	var inserts uint64
-	for i := 1; i < 5; i++ {
+	start := time.Now()
+	for i := 1; i <= numSteps; i++ {
 		for j := (i - 1) * step; j < i*step; j++ {
 			sumExpected += uint64(j)
 			inserts++
 		}
 	}
-
-	for i := 1; i < 5; i++ {
+	var wg sync.WaitGroup
+	for i := 1; i <= numSteps; i++ {
+		wg.Add(1)
 		go func(m int) {
+			defer wg.Done()
 			for j := (m - 1) * step; j < m*step; j++ {
 				ring.Insert(j)
 				//				atomic.AddUint64(&sumExpected, uint64(j))
@@ -167,14 +192,16 @@ func Test10e6InsertSync(t *testing.T) {
 		v := ring.Get()
 		sumOut += uint64(v)
 		reads++
-		if reads == uint64(4*step) {
+		if reads == uint64(numSteps*step) {
 			break
 		}
 	}
-	time.Sleep(time.Second)
-	fmt.Println("inserts ", atomic.LoadUint64(&inserts))
-	fmt.Println("sumExp", sumExpected, " sumOut: ", sumOut, " reads:", reads)
-	fmt.Println("indexr: ", ring.indexr, " indexw: ", ring.indexw)
+	wg.Wait()
+	fmt.Println("time took:", time.Since(start).Milliseconds(), "ms")
+	assert.Equal(t, sumExpected, sumOut)
+	assert.Equal(t, inserts, reads)
+	assert.Equal(t, inserts, ring.indexr)
+	assert.Equal(t, inserts, ring.indexw)
 }
 
 func BenchmarkInsertGet(b *testing.B) {
