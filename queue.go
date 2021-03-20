@@ -12,7 +12,9 @@ type Ring struct {
 	arr    []int64
 }
 
-func NewRing(size int) *Ring {
+// power used as power of 2 for array size
+func NewRing(power int) *Ring {
+	size := 1 << power
 	ring := &Ring{
 		uint64(size), 0, 0, make([]int64, size),
 	}
@@ -31,10 +33,12 @@ func (r *Ring) Insert(v int) {
 			// wait full
 			continue
 		}
+		// TODO maybe to store first and then inc indexw
+		// then sentinal value can be removed
 		// free slots
 		if atomic.CompareAndSwapUint64(&r.indexw, indexw, indexw+1) {
 			// reserved
-			atomic.StoreInt64(&r.arr[indexw%r.size], val)
+			atomic.StoreInt64(&r.arr[indexw&(r.size-1)], val)
 			break
 		}
 	}
@@ -45,10 +49,10 @@ func (r *Ring) Get() int {
 		indexr := atomic.LoadUint64(&r.indexr)
 		if atomic.LoadUint64(&r.indexw) > indexr {
 			// read
-			v := atomic.LoadInt64(&r.arr[indexr%r.size])
+			v := atomic.LoadInt64(&r.arr[indexr&(r.size-1)])
 			// check
 			if v != -1 && atomic.CompareAndSwapUint64(&r.indexr, indexr, indexr+1) {
-				atomic.StoreInt64(&r.arr[indexr%r.size], -1)
+				atomic.StoreInt64(&r.arr[indexr&(r.size-1)], -1)
 				return int(v)
 			}
 		}
@@ -63,7 +67,9 @@ type RingSync struct {
 	arr    []int64
 }
 
-func NewRingSync(size int) *RingSync {
+// power of 2 of size
+func NewRingSync(power int) *RingSync {
+	size := 1 << power
 	ring := &RingSync{
 		size: uint64(size), indexr: 0, indexw: 0, arr: make([]int64, size),
 	}
@@ -80,7 +86,7 @@ func (r *RingSync) Insert(v int) {
 			continue
 		}
 		// free slots
-		r.arr[r.indexw%r.size] = val
+		r.arr[r.indexw&(r.size-1)] = val
 		r.indexw++
 		r.mu.Unlock()
 		break
@@ -93,7 +99,7 @@ func (r *RingSync) Get() int {
 		r.mu.Lock()
 		if r.indexw > r.indexr {
 			// reserved
-			v := r.arr[r.indexr%r.size]
+			v := r.arr[r.indexr&(r.size-1)]
 			r.indexr++
 			r.mu.Unlock()
 			return int(v)

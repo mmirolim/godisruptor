@@ -11,7 +11,7 @@ import (
 )
 
 func TestInsert(t *testing.T) {
-	ring := NewRing(11)
+	ring := NewRing(4)
 	var vals []int64
 	for i := 0; i < 10; i++ {
 		vals = append(vals, int64(i))
@@ -24,9 +24,9 @@ func TestInsert(t *testing.T) {
 }
 
 func TestInsertSync(t *testing.T) {
-	ring := NewRingSync(20)
+	ring := NewRingSync(5)
 	var vals []int64
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 1<<5; i++ {
 		vals = append(vals, int64(i))
 	}
 	for i := range vals {
@@ -59,66 +59,10 @@ func TestRaceForArr(t *testing.T) {
 	assert.Equal(t, arr[8], 9999)
 }
 
-func TestConcurrentInsertRead(t *testing.T) {
-	ring := NewRing(10)
-	go func() {
-		for i := 0; i < 10; i++ {
-			ring.Insert(i)
-		}
-	}()
-	go func() {
-		for i := 10; i < 2*10; i++ {
-			ring.Insert(i)
-		}
-	}()
-	var mu sync.Mutex
-	var numGets uint64
-	vals := map[int]bool{}
-	go func() {
-		for {
-			v := ring.Get()
-			mu.Lock()
-			_, ok := vals[v]
-			if ok {
-				fmt.Println("value returned again", v)
-			}
-			vals[v] = true
-			numGets++
-			mu.Unlock()
-		}
-	}()
-	go func() {
-		for {
-			v := ring.Get()
-			mu.Lock()
-			_, ok := vals[v]
-			if ok {
-				fmt.Println("value returned again", v)
-			}
-			vals[v] = true
-			numGets++
-			mu.Unlock()
-		}
-	}()
-
-	time.Sleep(time.Second)
-	mu.Lock()
-	assert.Equal(t, uint64(len(vals)), numGets)
-	assert.Equal(t, uint64(20), ring.indexr)
-	assert.Equal(t, uint64(20), ring.indexw)
-	var valsSlice []int
-	for k := range vals {
-		valsSlice = append(valsSlice, k)
-	}
-	for i := range ring.arr {
-		assert.Equal(t, int64(-1), ring.arr[i])
-	}
-}
-
 func Test10e6Insert(t *testing.T) {
 	step := 10000
 	numSteps := 10
-	ring := NewRing(step)
+	ring := NewRing(numSteps)
 	var sumExpected uint64
 	var inserts uint64
 	for i := 1; i <= numSteps; i++ {
@@ -162,7 +106,7 @@ func Test10e6Insert(t *testing.T) {
 func Test10e6InsertSync(t *testing.T) {
 	step := 10000
 	numSteps := 10
-	ring := NewRingSync(step)
+	ring := NewRingSync(numSteps)
 
 	var sumExpected uint64
 	var inserts uint64
@@ -202,6 +146,18 @@ func Test10e6InsertSync(t *testing.T) {
 	assert.Equal(t, inserts, reads)
 	assert.Equal(t, inserts, ring.indexr)
 	assert.Equal(t, inserts, ring.indexw)
+}
+
+func mod(v uint, d uint) uint {
+	return v & (d - 1)
+}
+
+func TestModBit(t *testing.T) {
+	for v := 100; v < 200; v++ {
+		for _, d := range []uint{2, 4, 8, 16, 32, 64, 128} {
+			assert.Equal(t, uint(v)%d, mod(uint(v), d))
+		}
+	}
 }
 
 func BenchmarkInsertGet(b *testing.B) {
