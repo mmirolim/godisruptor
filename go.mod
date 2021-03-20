@@ -2,4 +2,7 @@ module github.com/mmirolim/godisruptor
 
 go 1.16
 
-require github.com/stretchr/testify v1.7.0 // indirect
+require (
+	github.com/stretchr/testify v1.7.0 // indirect
+	golang.org/x/tools/gopls v0.6.9 // indirect
+)
