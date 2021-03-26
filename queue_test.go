@@ -58,16 +58,43 @@ func TestRaceForArr(t *testing.T) {
 	}()
 
 	wg.Wait()
-	assert.Equal(t, arr[9], val)
-	//	assert.Equal(t, arr[9], 1000)
-	// assert.Equal(t, arr[8], 9999)
+	assert.Equal(t, arr[9], int64(9999))
+	assert.Equal(t, val, int64(9999))
 	dur := time.Since(start).Seconds()
 	fmt.Printf("%f \n", float64(n)/dur)
 }
 
+func TestFalseSharing(t *testing.T) {
+	arr := make([]int64, 8*2)
+	var wg sync.WaitGroup
+
+	start := time.Now()
+	var n int = 10000
+	for i := 0; i < 1000; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < n; i++ {
+				//atomic.AddInt64(&arr[0], int64(i))
+				arr[0] = int64(i)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for i := 0; i < n; i++ {
+				//atomic.AddInt64(&arr[15], int64(i))
+				arr[8] = int64(i)
+			}
+		}()
+	}
+	wg.Wait()
+	dur := time.Since(start).Milliseconds()
+	fmt.Printf("%d \n", int64(n)/dur)
+}
+
 func Test10e6Insert(t *testing.T) {
 	step := 100000
-	numSteps := 1
+	numSteps := 2
 	ring := NewRing(10)
 	var sumExpected uint64
 	var inserts uint64
@@ -85,7 +112,7 @@ func Test10e6Insert(t *testing.T) {
 		go func(m int) {
 			defer wg.Done()
 			for j := (m - 1) * step; j < m*step; j++ {
-				ring.Insert2(j)
+				ring.Insert3(j)
 			}
 		}(i)
 	}
@@ -93,7 +120,7 @@ func Test10e6Insert(t *testing.T) {
 	var sumOut uint64
 	var reads uint64
 	for {
-		v := ring.Get2()
+		v := ring.Get3()
 		sumOut += uint64(v)
 		reads++
 		if reads == uint64(numSteps*step) {
@@ -111,7 +138,7 @@ func Test10e6Insert(t *testing.T) {
 
 func Test10e6InsertSync(t *testing.T) {
 	step := 100000
-	numSteps := 1
+	numSteps := 2
 	ring := NewRingSync(10)
 
 	var sumExpected uint64
@@ -158,11 +185,11 @@ func TestWriteReadOpsPerSecond(t *testing.T) {
 	nwriters := 1
 	nreaders := 1
 	var sec uint64 = 2
-	bufSizePower := 10 // 65536
+	bufSizePower := 14 // 65536
 	fmt.Println("GOMAXPROCS: ", runtime.GOMAXPROCS(-1))
-
+	fmt.Printf("NumOfWriters %d NumOfReaders %d\n", nwriters, nreaders)
 	t.Run("NoLock", func(t *testing.T) {
-		var inserts, reads uint64
+		var inserts, reads [8]uint64
 		ring := NewRing(bufSizePower)
 		quit := make(chan bool)
 		for i := 0; i < nwriters; i++ {
@@ -170,11 +197,11 @@ func TestWriteReadOpsPerSecond(t *testing.T) {
 				for {
 					select {
 					case <-quit:
-						break
+						return
 					default:
 					}
 					ring.Insert(1000)
-					atomic.AddUint64(&inserts, 1)
+					atomic.AddUint64(&inserts[0], 1)
 				}
 			}()
 		}
@@ -184,22 +211,57 @@ func TestWriteReadOpsPerSecond(t *testing.T) {
 				for {
 					select {
 					case <-quit:
-						break
+						return
 					default:
 					}
 					_ = ring.Get()
-					atomic.AddUint64(&reads, 1)
+					atomic.AddUint64(&reads[0], 1)
 				}
 			}()
 		}
 		time.Sleep(time.Duration(sec) * time.Second)
 		close(quit)
-		fmt.Println("average inserts/s", inserts/sec)
-		fmt.Println("average read/s", reads/sec)
-
+		fmt.Println("average inserts/s", atomic.LoadUint64(&inserts[0])/sec)
+		fmt.Println("average read/s", atomic.LoadUint64(&reads[0])/sec)
+	})
+	t.Run("Sync", func(t *testing.T) {
+		var inserts, reads [8]uint64
+		ring := NewRingSync(bufSizePower)
+		quit := make(chan bool)
+		for i := 0; i < nwriters; i++ {
+			go func() {
+				for {
+					select {
+					case <-quit:
+						return
+					default:
+					}
+					ring.Insert(1000)
+					atomic.AddUint64(&inserts[0], 1)
+				}
+			}()
+		}
+		//	var v int
+		for i := 0; i < nreaders; i++ {
+			go func() {
+				for {
+					select {
+					case <-quit:
+						return
+					default:
+					}
+					_ = ring.Get()
+					atomic.AddUint64(&reads[0], 1)
+				}
+			}()
+		}
+		time.Sleep(time.Duration(sec) * time.Second)
+		close(quit)
+		fmt.Println("average inserts/s", atomic.LoadUint64(&inserts[0])/sec)
+		fmt.Println("average read/s", atomic.LoadUint64(&reads[0])/sec)
 	})
 	t.Run("BufferedChan", func(t *testing.T) {
-		var inserts, reads uint64
+		var inserts, reads [8]uint64
 		channel := make(chan int, 1<<bufSizePower)
 		quit := make(chan bool)
 		for i := 0; i < nwriters; i++ {
@@ -207,24 +269,23 @@ func TestWriteReadOpsPerSecond(t *testing.T) {
 				for {
 					select {
 					case <-quit:
-						break
+						return
 					default:
 					}
 					channel <- 1000
-					atomic.AddUint64(&inserts, 1)
+					atomic.AddUint64(&inserts[0], 1)
 				}
 			}()
 		}
 
-		var v int
 		for i := 0; i < nreaders; i++ {
 			go func() {
 				for {
 					select {
 					case <-quit:
-						break
-					case v = <-channel:
-						atomic.AddUint64(&reads, 1)
+						return
+					case <-channel:
+						atomic.AddUint64(&reads[0], 1)
 					default:
 					}
 
@@ -233,20 +294,19 @@ func TestWriteReadOpsPerSecond(t *testing.T) {
 		}
 		time.Sleep(time.Duration(sec) * time.Second)
 		close(quit)
-		assert.Equal(t, 1000, v)
-		fmt.Println("average inserts/s", inserts/sec)
-		fmt.Println("average read/s", reads/sec)
+		fmt.Println("average inserts/s", atomic.LoadUint64(&inserts[0])/sec)
+		fmt.Println("average read/s", atomic.LoadUint64(&reads[0])/sec)
 	})
 }
 
-func mod(v uint, d uint) uint {
+func mod(v int, d int) int {
 	return v & (d - 1)
 }
 
 func TestModBit(t *testing.T) {
 	for v := 100; v < 200; v++ {
-		for _, d := range []uint{2, 4, 8, 16, 32, 64, 128} {
-			assert.Equal(t, uint(v)%d, mod(uint(v), d))
+		for _, d := range []int{2, 4, 8, 16, 32, 64, 128} {
+			assert.Equal(t, v%d, mod(v, d))
 		}
 	}
 }
