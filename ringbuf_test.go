@@ -22,8 +22,9 @@ func TestRingBufferSingleWriterSingleConsumer(t *testing.T) {
 			sum[0] += uint64(buffer[i&d])
 		}
 	}
-	consumer := NewConsumer(fn)
-	ring := NewRingBuffer(bufSizePower, consumer)
+
+	ring := NewRingBuffer(bufSizePower, fn)
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -42,7 +43,7 @@ func TestRingBufferSingleWriterSingleConsumer(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		consumer.Run(ring)
+		ring.cons[0].Run(ring)
 	}()
 
 	wg.Wait()
@@ -70,8 +71,8 @@ func TestRingBufferWriteReadOpsPerSecond(t *testing.T) {
 				reads[0]++
 			}
 		}
-		consumer := NewConsumer(fn)
-		ring := NewRingBuffer(bufSizePower, consumer)
+
+		ring := NewRingBuffer(bufSizePower, fn)
 
 		var wg sync.WaitGroup
 		iters := int(10e6)
@@ -91,7 +92,7 @@ func TestRingBufferWriteReadOpsPerSecond(t *testing.T) {
 
 		for i := 0; i < nreaders; i++ {
 			go func() {
-				consumer.Run(ring)
+				ring.cons[0].Run(ring)
 			}()
 		}
 		wg.Wait()
@@ -183,8 +184,9 @@ func BenchmarkRingBufferSingleWriterSingleConsumer(b *testing.B) {
 			sum += arr[i&int64(RingBufferMask)]
 		}
 	}
-	consumer := NewConsumer(fn)
-	ring := NewRingBuffer(RingBufferSize, consumer)
+
+	ring := NewRingBuffer(RingBufferSize, fn)
+
 	go func() {
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -197,5 +199,5 @@ func BenchmarkRingBufferSingleWriterSingleConsumer(b *testing.B) {
 		}
 		ring.Stop()
 	}()
-	consumer.Run(ring)
+	ring.cons[0].Run(ring)
 }
