@@ -1,6 +1,7 @@
 package godisruptor
 
 import (
+	"fmt"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -35,8 +36,18 @@ func NewRingBuffer(p2 int, fns ...func(low, up int64)) *RingBuffer {
 	barrier := NewSeqBarrier(ring.cursor)
 
 	var cons []*Consumer
-	for i := range fns {
-		cons = append(cons, NewConsumer(barrier, fns[i]))
+	cons = append(cons, NewConsumer("C0", barrier, fns[0]))
+	// TODO handle different wireups
+	// unicast
+	// multicast
+
+	// pipeline
+	if len(fns) > 1 {
+		for i := 1; i < len(fns); i++ {
+			barrier := NewSeqBarrier(cons[i-1].Last)
+			con := NewConsumer(fmt.Sprintf("C%d", i), barrier, fns[i])
+			cons = append(cons, con)
+		}
 	}
 	ring.cons = cons
 
@@ -49,14 +60,13 @@ func (r *RingBuffer) Next() int64 {
 	spinMask := 1024*16 - 1
 
 	// for step pipeline consumers take last one
-	minCon := &r.cons[len(r.cons)-1].Last
+	minCons := r.cons[len(r.cons)-1].Last
 
 	// TODO add for multicast
 	// TODO add logic for diamond consumers
 
 	for {
-		minCons := atomic.LoadInt64(minCon)
-		if r.seq-minCons < r.d {
+		if r.seq-minCons.Load() < r.d {
 			break
 		}
 		if spin&spinMask == 0 {
@@ -114,17 +124,21 @@ func (b *SeqBarrier) WaitFor(nextseq int64) int64 {
 }
 
 type Consumer struct {
+	name   string
 	seq    *SeqBarrier
-	_      cpu.CacheLinePad
-	Last   int64
+	Last   *Cursor
 	_      cpu.CacheLinePad
 	cursor int64
 	_      cpu.CacheLinePad
 	fn     func(lower, upper int64)
 }
 
-func NewConsumer(bar *SeqBarrier, fn func(lower, upper int64)) *Consumer {
-	return &Consumer{seq: bar, Last: -1, cursor: -1, fn: fn}
+func NewConsumer(name string, bar *SeqBarrier, fn func(lower, upper int64)) *Consumer {
+	return &Consumer{
+		name:   name,
+		seq:    bar,
+		Last:   &Cursor{val: -1},
+		cursor: -1, fn: fn}
 }
 
 func (con *Consumer) Run(buf *RingBuffer) {
@@ -133,9 +147,9 @@ func (con *Consumer) Run(buf *RingBuffer) {
 		if con.cursor == -1 {
 			return
 		}
-		con.fn(con.Last+1, con.cursor)
+		con.fn(con.Last.Load()+1, con.cursor)
 		// advance
-		atomic.StoreInt64(&con.Last, con.cursor)
+		con.Last.Store(con.cursor)
 	}
 }
 

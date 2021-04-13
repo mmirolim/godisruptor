@@ -52,6 +52,75 @@ func TestRingBufferSingleWriterSingleConsumer(t *testing.T) {
 	assert.Equal(t, inserts[0], reads[0])
 }
 
+func TestRingBufferSingleWriterThreeStepPipeline(t *testing.T) {
+	var numIters int = 1e5
+	data := make([]int, numIters)
+	bufSizePower := 14
+	var d int64 = 1<<bufSizePower - 1
+	buffer := make([]int, 1<<bufSizePower)
+
+	var sumExpected, resSum, inserts, reads [8]int64
+	add1 := func(lower, upper int64) {
+		for i := lower; i <= upper; i++ {
+			buffer[i&d] = buffer[i&d] + 1
+		}
+	}
+	mul2 := func(lower, upper int64) {
+		for i := lower; i <= upper; i++ {
+			buffer[i&d] = buffer[i&d] * 2
+		}
+	}
+	sub5 := func(lower, upper int64) {
+		for i := lower; i <= upper; i++ {
+			reads[0]++
+			buffer[i&d] = buffer[i&d] - 5
+			resSum[0] += int64(buffer[i&d])
+		}
+	}
+	// init expected data set
+	for i := 0; i < numIters; i++ {
+		data[i] = i
+		// add1
+		data[i] += 1
+		// mul2
+		data[i] *= 2
+		// sub5
+		data[i] -= 5
+	}
+	for i := range data {
+		sumExpected[0] += int64(data[i])
+	}
+	ring := NewRingBuffer(bufSizePower, add1, mul2, sub5)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < numIters; i++ {
+			id := ring.Next()
+			buffer[id&d] = i
+			ring.Publish(id)
+
+			inserts[0]++
+		}
+		time.Sleep(10 * time.Millisecond)
+		ring.Stop()
+	}()
+
+	for i := range ring.cons {
+		wg.Add(1)
+		go func(iter int) {
+			defer wg.Done()
+			fmt.Printf("start consumer %d %v\n", iter, ring.cons[iter].name)
+			ring.cons[iter].Run(ring)
+		}(i)
+	}
+	wg.Wait()
+
+	assert.Equal(t, sumExpected[0], resSum[0])
+	assert.Equal(t, inserts[0], reads[0])
+}
+
 func TestRingBufferWriteReadOpsPerSecond(t *testing.T) {
 	nwriters := 1
 	nreaders := 1
