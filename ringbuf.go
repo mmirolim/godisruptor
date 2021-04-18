@@ -10,9 +10,12 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
+// TODO add support for multiple writers
+// TODO add benchmarks and compare with mutex and channels
+
 const defaultCursorValue = -1
 
-type RingBuffer struct {
+type Disruptor struct {
 	consStr ConsumerConfiguration
 	size    int64
 	cursor  *Cursor
@@ -31,12 +34,12 @@ const (
 	CONSUMER_MULTICAST ConsumerConfiguration = 3
 )
 
-func NewRingBuffer(p2 int,
+func NewDisruptor(p2 int,
 	consumerConf ConsumerConfiguration,
-	fns ...func(low, up int64)) (*RingBuffer, error) {
+	fns ...func(low, up int64)) (*Disruptor, error) {
 	var size int64 = 1 << p2
 
-	ring := &RingBuffer{
+	ring := &Disruptor{
 		consStr: consumerConf,
 		size:    size,
 		cursor:  &Cursor{val: defaultCursorValue},
@@ -80,7 +83,7 @@ func NewRingBuffer(p2 int,
 }
 
 // single writer expected
-func (r *RingBuffer) Next() int64 {
+func (r *Disruptor) Next() int64 {
 	spin := 0
 	spinMask := 1024*16 - 1
 
@@ -115,11 +118,19 @@ func (r *RingBuffer) Next() int64 {
 	return r.seq
 }
 
-func (r *RingBuffer) Publish(i int64) {
+func (r *Disruptor) Publish(i int64) {
 	r.cursor.Store(i)
 }
 
-func (r *RingBuffer) Stop() {
+func (r *Disruptor) Start() {
+	for i := range r.cons {
+		go func(i int) {
+			r.cons[i].Start()
+		}(i)
+	}
+}
+
+func (r *Disruptor) Stop() {
 	r.cursor.Store(STATE_STOPPED)
 	for i := range r.cons {
 		r.cons[i].seq.Stop()
@@ -176,7 +187,7 @@ func NewConsumer(name string, bar *SeqBarrier, fn func(lower, upper int64)) *Con
 		cursor: -1, fn: fn}
 }
 
-func (con *Consumer) Run(buf *RingBuffer) {
+func (con *Consumer) Start() {
 	for {
 		con.cursor = con.seq.WaitFor(con.cursor + 1)
 		if con.cursor == -1 {

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestRingBufferSingleWriterSingleConsumer(t *testing.T) {
+func TestDisruptorSingleWriterSingleConsumer(t *testing.T) {
 	bufSizePower := 14
 	var d int64 = 1<<bufSizePower - 1
 	buffer := make([]int, 1<<bufSizePower)
@@ -23,7 +23,7 @@ func TestRingBufferSingleWriterSingleConsumer(t *testing.T) {
 		}
 	}
 
-	ring, err := NewRingBuffer(bufSizePower, CONSUMER_UNICAST, fn)
+	disruptor, err := NewDisruptor(bufSizePower, CONSUMER_UNICAST, fn)
 	assert.Nil(t, err)
 
 	var wg sync.WaitGroup
@@ -31,21 +31,18 @@ func TestRingBufferSingleWriterSingleConsumer(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 1e6; i++ {
-			id := ring.Next()
+			id := disruptor.Next()
 			buffer[id&d] = i
-			ring.Publish(id)
+			disruptor.Publish(id)
 
 			inserts[0]++
 			sumExpected[0] += uint64(i)
 		}
 		time.Sleep(10 * time.Millisecond)
-		ring.Stop()
+		disruptor.Stop()
 	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ring.cons[0].Run(ring)
-	}()
+
+	disruptor.Start()
 
 	wg.Wait()
 
@@ -53,7 +50,7 @@ func TestRingBufferSingleWriterSingleConsumer(t *testing.T) {
 	assert.Equal(t, inserts[0], reads[0])
 }
 
-func TestRingBufferSingleWriterThreeStepPipeline(t *testing.T) {
+func TestDisruptorSingleWriterThreeStepPipeline(t *testing.T) {
 	var numIters int = 1e5
 	data := make([]int, numIters)
 	bufSizePower := 14
@@ -91,38 +88,30 @@ func TestRingBufferSingleWriterThreeStepPipeline(t *testing.T) {
 	for i := range data {
 		sumExpected[0] += int64(data[i])
 	}
-	ring, err := NewRingBuffer(bufSizePower, CONSUMER_PIPELINE, add1, mul2, sub5)
+	disruptor, err := NewDisruptor(bufSizePower, CONSUMER_PIPELINE, add1, mul2, sub5)
 	assert.Nil(t, err)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for i := 0; i < numIters; i++ {
-			id := ring.Next()
+			id := disruptor.Next()
 			buffer[id&d] = i
-			ring.Publish(id)
+			disruptor.Publish(id)
 
 			inserts[0]++
 		}
 		time.Sleep(10 * time.Millisecond)
-		ring.Stop()
+		disruptor.Stop()
 	}()
-
-	for i := range ring.cons {
-		wg.Add(1)
-		go func(iter int) {
-			defer wg.Done()
-			fmt.Printf("start consumer %d %v\n", iter, ring.cons[iter].name)
-			ring.cons[iter].Run(ring)
-		}(i)
-	}
+	disruptor.Start()
 	wg.Wait()
 
 	assert.Equal(t, sumExpected[0], resSum[0])
 	assert.Equal(t, inserts[0], reads[0])
 }
 
-func TestRingBufferSingleWriterMultipleUnicastConsumers(t *testing.T) {
+func TestDisruptorSingleWriterMultipleUnicastConsumers(t *testing.T) {
 	var numIters int = 1e5
 	data := make([]int, numIters)
 	bufSizePower := 14
@@ -156,29 +145,21 @@ func TestRingBufferSingleWriterMultipleUnicastConsumers(t *testing.T) {
 		sum3sExp[0] += data[i] + 3
 	}
 
-	ring, err := NewRingBuffer(bufSizePower, CONSUMER_MULTICAST, add1, add2, add3)
+	disruptor, err := NewDisruptor(bufSizePower, CONSUMER_MULTICAST, add1, add2, add3)
 	assert.Nil(t, err)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for i := 0; i < numIters; i++ {
-			id := ring.Next()
+			id := disruptor.Next()
 			buffer[id&d] = i
-			ring.Publish(id)
+			disruptor.Publish(id)
 		}
 		time.Sleep(10 * time.Millisecond)
-		ring.Stop()
+		disruptor.Stop()
 	}()
-
-	for i := range ring.cons {
-		wg.Add(1)
-		go func(iter int) {
-			defer wg.Done()
-			fmt.Printf("start consumer %d %v\n", iter, ring.cons[iter].name)
-			ring.cons[iter].Run(ring)
-		}(i)
-	}
+	disruptor.Start()
 	wg.Wait()
 
 	assert.Equal(t, sum1sExp[0], sum1s[0])
@@ -186,7 +167,7 @@ func TestRingBufferSingleWriterMultipleUnicastConsumers(t *testing.T) {
 	assert.Equal(t, sum3sExp[0], sum3s[0])
 }
 
-func TestRingBufferWriteReadOpsPerSecond(t *testing.T) {
+func TestDisruptorWriteReadOpsPerSecond(t *testing.T) {
 	nwriters := 1
 	nreaders := 1
 
@@ -206,7 +187,7 @@ func TestRingBufferWriteReadOpsPerSecond(t *testing.T) {
 			}
 		}
 
-		ring, err := NewRingBuffer(bufSizePower, CONSUMER_UNICAST, fn)
+		disruptor, err := NewDisruptor(bufSizePower, CONSUMER_UNICAST, fn)
 		assert.Nil(t, err)
 
 		var wg sync.WaitGroup
@@ -217,19 +198,15 @@ func TestRingBufferWriteReadOpsPerSecond(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for i := 0; i < iters; i++ {
-					id := ring.Next()
+					id := disruptor.Next()
 					arr[id&d] = i
-					ring.Publish(id)
+					disruptor.Publish(id)
 				}
-				ring.Stop()
+				disruptor.Stop()
 			}()
 		}
+		disruptor.Start()
 
-		for i := 0; i < nreaders; i++ {
-			go func() {
-				ring.cons[0].Run(ring)
-			}()
-		}
 		wg.Wait()
 		dur := time.Since(start)
 		fmt.Printf("average %.f inserts/s\n", float64(iters)/dur.Seconds())
@@ -306,34 +283,38 @@ func TestRingBufferWriteReadOpsPerSecond(t *testing.T) {
 	})
 }
 
-func BenchmarkRingBufferSingleWriterSingleConsumer(b *testing.B) {
+func BenchmarkDisruptorSingleWriterSingleConsumer(b *testing.B) {
 	var (
-		sum            int = 0
-		RingBufferSize     = 16
-		RingBufferMask     = RingBufferSize - 1
+		sum           int = 0
+		DisruptorSize     = 16
+		DisruptorMask     = DisruptorSize - 1
 	)
 
-	arr := make([]int, 1<<RingBufferSize)
+	arr := make([]int, 1<<DisruptorSize)
 	fn := func(lower, upper int64) {
 		for i := lower; i <= upper; i++ {
-			sum += arr[i&int64(RingBufferMask)]
+			sum += arr[i&int64(DisruptorMask)]
 		}
 	}
 
-	ring, err := NewRingBuffer(RingBufferSize, CONSUMER_UNICAST, fn)
+	disruptor, err := NewDisruptor(DisruptorSize, CONSUMER_UNICAST, fn)
 	assert.Nil(b, err)
-
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		b.ReportAllocs()
 		b.ResetTimer()
 
 		for i := 0; i < b.N; i++ {
-			id := ring.Next()
-			arr[id&int64(RingBufferMask)] = i
-			ring.Publish(id)
+			id := disruptor.Next()
+			arr[id&int64(DisruptorMask)] = i
+			disruptor.Publish(id)
 
 		}
-		ring.Stop()
+		disruptor.Stop()
 	}()
-	ring.cons[0].Run(ring)
+	disruptor.Start()
+
+	wg.Wait()
 }
