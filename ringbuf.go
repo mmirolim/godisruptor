@@ -1,6 +1,7 @@
 package godisruptor
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 const defaultCursorValue = -1
 
 type RingBuffer struct {
+	consStr ConsumerConfiguration
 	size    int64
 	cursor  *Cursor
 	_       cpu.CacheLinePad
@@ -21,11 +23,21 @@ type RingBuffer struct {
 	cons    []*Consumer
 	d       int64 // denominator for bit module operation
 }
+type ConsumerConfiguration int
 
-func NewRingBuffer(p2 int, fns ...func(low, up int64)) *RingBuffer {
+const (
+	CONSUMER_UNICAST   ConsumerConfiguration = 1
+	CONSUMER_PIPELINE  ConsumerConfiguration = 2
+	CONSUMER_MULTICAST ConsumerConfiguration = 3
+)
+
+func NewRingBuffer(p2 int,
+	consumerConf ConsumerConfiguration,
+	fns ...func(low, up int64)) (*RingBuffer, error) {
 	var size int64 = 1 << p2
 
 	ring := &RingBuffer{
+		consStr: consumerConf,
 		size:    size,
 		cursor:  &Cursor{val: defaultCursorValue},
 		seq:     defaultCursorValue,
@@ -37,21 +49,34 @@ func NewRingBuffer(p2 int, fns ...func(low, up int64)) *RingBuffer {
 
 	var cons []*Consumer
 	cons = append(cons, NewConsumer("C0", barrier, fns[0]))
-	// TODO handle different wireups
-	// unicast
-	// multicast
 
-	// pipeline
-	if len(fns) > 1 {
-		for i := 1; i < len(fns); i++ {
-			barrier := NewSeqBarrier(cons[i-1].Last)
-			con := NewConsumer(fmt.Sprintf("C%d", i), barrier, fns[i])
-			cons = append(cons, con)
+	switch ring.consStr {
+	case CONSUMER_UNICAST:
+		if len(fns) != 1 {
+			return nil, errors.New("only one consumer expected")
 		}
+	case CONSUMER_PIPELINE:
+		if len(fns) > 1 {
+			for i := 1; i < len(fns); i++ {
+				barrier := NewSeqBarrier(cons[i-1].Last)
+				con := NewConsumer(fmt.Sprintf("C%d", i), barrier, fns[i])
+				cons = append(cons, con)
+			}
+		}
+	case CONSUMER_MULTICAST:
+		if len(fns) > 1 {
+			for i := 1; i < len(fns); i++ {
+				con := NewConsumer(fmt.Sprintf("C%d", i), barrier, fns[i])
+				cons = append(cons, con)
+			}
+		}
+	default:
+		return nil, errors.New("unhandled Consumer Configuration")
 	}
+
 	ring.cons = cons
 
-	return ring
+	return ring, nil
 }
 
 // single writer expected
@@ -60,13 +85,23 @@ func (r *RingBuffer) Next() int64 {
 	spinMask := 1024*16 - 1
 
 	// for step pipeline consumers take last one
-	minCons := r.cons[len(r.cons)-1].Last
+	consNum := len(r.cons)
+	minCons := r.cons[consNum-1].Last
 
-	// TODO add for multicast
 	// TODO add logic for diamond consumers
-
 	for {
-		if r.seq-minCons.Load() < r.d {
+		minIndex := minCons.Load()
+		if r.consStr == CONSUMER_MULTICAST {
+			// get min Index
+			for i := 0; i < consNum-1; i++ {
+				val := r.cons[i].Last.Load()
+				if val < minIndex {
+					minIndex = val
+				}
+			}
+		}
+
+		if r.seq-minIndex < r.d {
 			break
 		}
 		if spin&spinMask == 0 {
