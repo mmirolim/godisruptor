@@ -26,10 +26,7 @@ func TestDisruptorSingleWriterSingleConsumer(t *testing.T) {
 	disruptor, err := NewDisruptor(bufSizePower, PRODUCER_SINGLE, CONSUMER_UNICAST, fn)
 	assert.Nil(t, err)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
 		for i := 0; i < 1e6; i++ {
 			id := disruptor.Next()
 			buffer[id&d] = i
@@ -43,8 +40,6 @@ func TestDisruptorSingleWriterSingleConsumer(t *testing.T) {
 	}()
 
 	disruptor.Start()
-
-	wg.Wait()
 
 	assert.Equal(t, sumExpected[0], sum[0])
 	assert.Equal(t, inserts[0], reads[0])
@@ -90,10 +85,8 @@ func TestDisruptorSingleWriterThreeStepPipeline(t *testing.T) {
 	}
 	disruptor, err := NewDisruptor(bufSizePower, PRODUCER_SINGLE, CONSUMER_PIPELINE, add1, mul2, sub5)
 	assert.Nil(t, err)
-	var wg sync.WaitGroup
-	wg.Add(1)
+
 	go func() {
-		defer wg.Done()
 		for i := 0; i < numIters; i++ {
 			id := disruptor.Next()
 			buffer[id&d] = i
@@ -105,7 +98,6 @@ func TestDisruptorSingleWriterThreeStepPipeline(t *testing.T) {
 		disruptor.Stop()
 	}()
 	disruptor.Start()
-	wg.Wait()
 
 	assert.Equal(t, sumExpected[0], resSum[0])
 	assert.Equal(t, inserts[0], reads[0])
@@ -147,10 +139,8 @@ func TestDisruptorSingleWriteMulticastConsumers(t *testing.T) {
 
 	disruptor, err := NewDisruptor(bufSizePower, PRODUCER_SINGLE, CONSUMER_MULTICAST, add1, add2, add3)
 	assert.Nil(t, err)
-	var wg sync.WaitGroup
-	wg.Add(1)
+
 	go func() {
-		defer wg.Done()
 		for i := 0; i < numIters; i++ {
 			id := disruptor.Next()
 			buffer[id&d] = i
@@ -160,7 +150,6 @@ func TestDisruptorSingleWriteMulticastConsumers(t *testing.T) {
 		disruptor.Stop()
 	}()
 	disruptor.Start()
-	wg.Wait()
 
 	assert.Equal(t, sum1sExp[0], sum1s[0])
 	assert.Equal(t, sum2sExp[0], sum2s[0])
@@ -191,11 +180,9 @@ func TestDisruptorMultiProducerSingleConsumer(t *testing.T) {
 
 	disruptor, err := NewDisruptor(bufSizePower, PRODUCER_MULTI, CONSUMER_UNICAST, accum)
 	assert.Nil(t, err)
-	var wg sync.WaitGroup
+
 	for i := 0; i < 3; i++ {
-		wg.Add(1)
 		go func() {
-			defer wg.Done()
 			for j := 0; j < numIters; j++ {
 				id := disruptor.NextMulti()
 				buffer[id&d] = j
@@ -204,10 +191,12 @@ func TestDisruptorMultiProducerSingleConsumer(t *testing.T) {
 
 		}()
 	}
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		disruptor.Stop()
+	}()
+
 	disruptor.Start()
-	time.Sleep(10 * time.Millisecond)
-	disruptor.Stop()
-	wg.Wait()
 
 	assert.Equal(t, sum[0], sumExp[0])
 }

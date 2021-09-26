@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -186,11 +187,15 @@ func (r *Disruptor) PublishMulti(i int64) {
 }
 
 func (r *Disruptor) Start() {
+	var wg sync.WaitGroup
 	for i := range r.cons {
+		wg.Add(1)
 		go func(i int) {
+			defer wg.Done()
 			r.cons[i].Start()
 		}(i)
 	}
+	wg.Wait()
 }
 
 func (r *Disruptor) Stop() {
