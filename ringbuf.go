@@ -16,6 +16,7 @@ import (
 const defaultCursorValue = -1
 
 type Disruptor struct {
+	prodStr ProducerConfiguration
 	consStr ConsumerConfiguration
 	size    int64
 	cursor  *Cursor
@@ -27,19 +28,24 @@ type Disruptor struct {
 	d       int64 // denominator for bit module operation
 }
 type ConsumerConfiguration int
+type ProducerConfiguration int
 
 const (
 	CONSUMER_UNICAST   ConsumerConfiguration = 1
 	CONSUMER_PIPELINE  ConsumerConfiguration = 2
 	CONSUMER_MULTICAST ConsumerConfiguration = 3
+
+	PRODUCER_SINGLE ProducerConfiguration = 1
+	PRODUCER_MULTI  ProducerConfiguration = 2
 )
 
-func NewDisruptor(p2 int,
+func NewDisruptor(p2 int, producerConf ProducerConfiguration,
 	consumerConf ConsumerConfiguration,
 	fns ...func(low, up int64)) (*Disruptor, error) {
 	var size int64 = 1 << p2
 
 	ring := &Disruptor{
+		prodStr: producerConf,
 		consStr: consumerConf,
 		size:    size,
 		cursor:  &Cursor{val: defaultCursorValue},
@@ -107,6 +113,7 @@ func (r *Disruptor) Next() int64 {
 		if r.seq-minIndex < r.d {
 			break
 		}
+		spin++
 		if spin&spinMask == 0 {
 			if r.stopped.Load() == STATE_STOPPED {
 				return -1
@@ -118,7 +125,63 @@ func (r *Disruptor) Next() int64 {
 	return r.seq
 }
 
+// TODO implement for multi writer
+func (r *Disruptor) NextMulti() int64 {
+	spin := 0
+	spinMask := 1024*16 - 1
+	// for step pipeline consumers take last one
+	consNum := len(r.cons)
+	minCons := r.cons[consNum-1].Last
+
+	// TODO add logic for diamond consumers
+	var seq int64
+	for {
+		for {
+			if r.stopped.Load() == STATE_STOPPED {
+				return -1
+			}
+
+			minIndex := minCons.Load()
+			if r.consStr == CONSUMER_MULTICAST {
+				// get min Index
+				for i := 0; i < consNum-1; i++ {
+					val := r.cons[i].Last.Load()
+					if val < minIndex {
+						minIndex = val
+					}
+				}
+			}
+			seq = atomic.LoadInt64(&r.seq)
+			if seq-minIndex < r.d {
+				break
+			}
+			spin++
+			if spin&spinMask == 0 {
+				runtime.Gosched()
+			}
+		}
+		if atomic.CompareAndSwapInt64(&r.seq, seq, seq+1) {
+			break
+		}
+	}
+	return seq + 1
+}
+
 func (r *Disruptor) Publish(i int64) {
+	r.cursor.Store(i)
+}
+
+func (r *Disruptor) PublishMulti(i int64) {
+	spin := 0
+	spinMask := 1024*16 - 1
+
+	expected := i - 1
+	for r.cursor.Load() != expected {
+		spin++
+		if spin&spinMask == 0 {
+			runtime.Gosched()
+		}
+	}
 	r.cursor.Store(i)
 }
 
@@ -191,6 +254,8 @@ func (con *Consumer) Start() {
 	for {
 		con.cursor = con.seq.WaitFor(con.cursor + 1)
 		if con.cursor == -1 {
+			// TODO remove
+			fmt.Println(con.name, "return on", con.cursor)
 			return
 		}
 		con.fn(con.Last.Load()+1, con.cursor)

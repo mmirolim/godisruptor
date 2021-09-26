@@ -23,7 +23,7 @@ func TestDisruptorSingleWriterSingleConsumer(t *testing.T) {
 		}
 	}
 
-	disruptor, err := NewDisruptor(bufSizePower, CONSUMER_UNICAST, fn)
+	disruptor, err := NewDisruptor(bufSizePower, PRODUCER_SINGLE, CONSUMER_UNICAST, fn)
 	assert.Nil(t, err)
 
 	var wg sync.WaitGroup
@@ -88,7 +88,7 @@ func TestDisruptorSingleWriterThreeStepPipeline(t *testing.T) {
 	for i := range data {
 		sumExpected[0] += int64(data[i])
 	}
-	disruptor, err := NewDisruptor(bufSizePower, CONSUMER_PIPELINE, add1, mul2, sub5)
+	disruptor, err := NewDisruptor(bufSizePower, PRODUCER_SINGLE, CONSUMER_PIPELINE, add1, mul2, sub5)
 	assert.Nil(t, err)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -111,7 +111,7 @@ func TestDisruptorSingleWriterThreeStepPipeline(t *testing.T) {
 	assert.Equal(t, inserts[0], reads[0])
 }
 
-func TestDisruptorSingleWriterMultipleUnicastConsumers(t *testing.T) {
+func TestDisruptorSingleWriteMulticastConsumers(t *testing.T) {
 	var numIters int = 1e5
 	data := make([]int, numIters)
 	bufSizePower := 14
@@ -145,7 +145,7 @@ func TestDisruptorSingleWriterMultipleUnicastConsumers(t *testing.T) {
 		sum3sExp[0] += data[i] + 3
 	}
 
-	disruptor, err := NewDisruptor(bufSizePower, CONSUMER_MULTICAST, add1, add2, add3)
+	disruptor, err := NewDisruptor(bufSizePower, PRODUCER_SINGLE, CONSUMER_MULTICAST, add1, add2, add3)
 	assert.Nil(t, err)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -165,6 +165,51 @@ func TestDisruptorSingleWriterMultipleUnicastConsumers(t *testing.T) {
 	assert.Equal(t, sum1sExp[0], sum1s[0])
 	assert.Equal(t, sum2sExp[0], sum2s[0])
 	assert.Equal(t, sum3sExp[0], sum3s[0])
+}
+
+func TestDisruptorMultiProducerSingleConsumer(t *testing.T) {
+	var numIters int = 5
+	bufSizePower := 14
+	var d int64 = 1<<bufSizePower - 1
+	buffer := make([]int, 1<<bufSizePower)
+
+	var sum [8]int
+
+	accum := func(lower, upper int64) {
+		for i := lower; i <= upper; i++ {
+			sum[0] += buffer[i&d]
+		}
+	}
+
+	var sumExp [8]int
+	// init expected data set
+	for i := 0; i < 3; i++ {
+		for j := 0; j < numIters; j++ {
+			sumExp[0] += j
+		}
+	}
+
+	disruptor, err := NewDisruptor(bufSizePower, PRODUCER_MULTI, CONSUMER_UNICAST, accum)
+	assert.Nil(t, err)
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < numIters; j++ {
+				id := disruptor.NextMulti()
+				buffer[id&d] = j
+				disruptor.PublishMulti(id)
+			}
+
+		}()
+	}
+	disruptor.Start()
+	time.Sleep(10 * time.Millisecond)
+	disruptor.Stop()
+	wg.Wait()
+
+	assert.Equal(t, sum[0], sumExp[0])
 }
 
 func TestDisruptorWriteReadOpsPerSecond(t *testing.T) {
@@ -187,7 +232,7 @@ func TestDisruptorWriteReadOpsPerSecond(t *testing.T) {
 			}
 		}
 
-		disruptor, err := NewDisruptor(bufSizePower, CONSUMER_UNICAST, fn)
+		disruptor, err := NewDisruptor(bufSizePower, PRODUCER_SINGLE, CONSUMER_UNICAST, fn)
 		assert.Nil(t, err)
 
 		var wg sync.WaitGroup
@@ -297,7 +342,7 @@ func BenchmarkDisruptorSingleWriterSingleConsumer(b *testing.B) {
 		}
 	}
 
-	disruptor, err := NewDisruptor(DisruptorSize, CONSUMER_UNICAST, fn)
+	disruptor, err := NewDisruptor(DisruptorSize, PRODUCER_SINGLE, CONSUMER_UNICAST, fn)
 	assert.Nil(b, err)
 	var wg sync.WaitGroup
 	wg.Add(1)
