@@ -201,17 +201,86 @@ func TestDisruptorMultiProducerSingleConsumer(t *testing.T) {
 	assert.Equal(t, sum[0], sumExp[0])
 }
 
-func TestDisruptorWriteReadOpsPerSecond(t *testing.T) {
-	nwriters := 1
-	nreaders := 1
+func TestDisruptorMultiProducerMulticastConsumer(t *testing.T) {
+	var nwriters = 3
+	var numIters int = 1e5
+	bufSizePower := 14
+	data := make([]int, nwriters*numIters)
+	var d int64 = 1<<bufSizePower - 1
+	buffer := make([]int, 1<<bufSizePower)
 
+	var sum1s, sum2s, sum3s [8]int
+
+	add1 := func(lower, upper int64) {
+		for i := lower; i <= upper; i++ {
+			sum1s[0] += buffer[i&d] + 1
+		}
+	}
+	add2 := func(lower, upper int64) {
+		for i := lower; i <= upper; i++ {
+			sum2s[0] += buffer[i&d] + 2
+		}
+	}
+	add3 := func(lower, upper int64) {
+		for i := lower; i <= upper; i++ {
+			sum3s[0] += buffer[i&d] + 3
+		}
+	}
+
+	// init expected data set
+	for i := 0; i < nwriters; i++ {
+		for j := 0; j < numIters; j++ {
+			data[i*nwriters+j] += j
+		}
+	}
+
+	var sum1sExp, sum2sExp, sum3sExp [8]int
+	// init expected data set
+	for i := 0; i < nwriters*numIters; i++ {
+		sum1sExp[0] += data[i] + 1
+		sum2sExp[0] += data[i] + 2
+		sum3sExp[0] += data[i] + 3
+	}
+
+	disruptor, err := NewDisruptor(bufSizePower, PRODUCER_MULTI, CONSUMER_MULTICAST, add1, add2, add3)
+	assert.Nil(t, err)
+
+	var wg sync.WaitGroup
+	for i := 0; i < nwriters; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < numIters; j++ {
+				id := disruptor.NextMulti()
+				buffer[id&d] = j
+				disruptor.PublishMulti(id)
+			}
+
+		}()
+	}
+	go func() {
+		wg.Wait()
+		time.Sleep(10 * time.Millisecond)
+		disruptor.Stop()
+	}()
+
+	disruptor.Start()
+
+	assert.Equal(t, sum1sExp[0], sum1s[0])
+	assert.Equal(t, sum2sExp[0], sum2s[0])
+	assert.Equal(t, sum3sExp[0], sum3s[0])
+
+}
+
+func TestDisruptorWriteReadOpsPerSecond(t *testing.T) {
 	bufSizePower := 16 // 65536
 	var d int64 = 1<<bufSizePower - 1
 
 	fmt.Println("GOMAXPROCS: ", runtime.GOMAXPROCS(-1))
-	fmt.Printf("NumOfWriters %d NumOfReaders %d\n", nwriters, nreaders)
 
 	t.Run("OneWriterOneConsumer", func(t *testing.T) {
+		var nwriters, nreaders = 1, 1
+		fmt.Printf("NumOfWriters %d NumOfReaders %d\n", nwriters, nreaders)
 		var reads [8]uint64
 		arr := make([]int, 1<<bufSizePower)
 
@@ -247,6 +316,8 @@ func TestDisruptorWriteReadOpsPerSecond(t *testing.T) {
 		fmt.Printf("average %.f read/s\n", float64(iters)/dur.Seconds())
 	})
 	t.Run("OneWriterOneConsumerMutex", func(t *testing.T) {
+		var nwriters, nreaders = 1, 1
+		fmt.Printf("NumOfWriters %d NumOfReaders %d\n", nwriters, nreaders)
 		var reads [8]uint64
 		arr := make([]int, 1<<bufSizePower)
 		var mu sync.Mutex
@@ -314,6 +385,96 @@ func TestDisruptorWriteReadOpsPerSecond(t *testing.T) {
 		dur := time.Since(start)
 		fmt.Printf("average %.f inserts/s\n", float64(iters)/dur.Seconds())
 		fmt.Printf("average %.f read/s\n", float64(iters)/dur.Seconds())
+	})
+	t.Run("OneWriterMulticastConsumers", func(t *testing.T) {
+		var nwriters, nreaders = 1, 3
+		fmt.Printf("NumOfWriters %d NumOfReaders %d\n", nwriters, nreaders)
+
+		var numIters int = 1e5
+		bufSizePower := 14
+		var d int64 = 1<<bufSizePower - 1
+		buffer := make([]int, 1<<bufSizePower)
+
+		var sum1s, sum2s, sum3s [8]int
+
+		add1 := func(lower, upper int64) {
+			for i := lower; i <= upper; i++ {
+				sum1s[0] += buffer[i&d] + 1
+			}
+		}
+		add2 := func(lower, upper int64) {
+			for i := lower; i <= upper; i++ {
+				sum2s[0] += buffer[i&d] + 2
+			}
+		}
+		add3 := func(lower, upper int64) {
+			for i := lower; i <= upper; i++ {
+				sum3s[0] += buffer[i&d] + 3
+			}
+		}
+
+		disruptor, err := NewDisruptor(bufSizePower, PRODUCER_SINGLE, CONSUMER_MULTICAST, add1, add2, add3)
+		assert.Nil(t, err)
+
+		start := time.Now()
+		go func() {
+			for i := 0; i < numIters; i++ {
+				id := disruptor.Next()
+				buffer[id&d] = i
+				disruptor.Publish(id)
+			}
+			disruptor.Stop()
+		}()
+		disruptor.Start()
+
+		dur := time.Since(start)
+		fmt.Printf("average %.f inserts/s\n", float64(numIters)/dur.Seconds())
+		fmt.Printf("average %.f read/s\n", float64(numIters)/dur.Seconds())
+	})
+	t.Run("MultiProducerSingleConsumer", func(t *testing.T) {
+		var nwriters, nreaders = 3, 1
+		fmt.Printf("NumOfWriters %d NumOfReaders %d\n", nwriters, nreaders)
+
+		var numIters int = 1e5
+		bufSizePower := 14
+		var d int64 = 1<<bufSizePower - 1
+		buffer := make([]int, 1<<bufSizePower)
+
+		var sum [8]int
+
+		accum := func(lower, upper int64) {
+			for i := lower; i <= upper; i++ {
+				sum[0] += buffer[i&d]
+			}
+		}
+
+		disruptor, err := NewDisruptor(bufSizePower, PRODUCER_MULTI, CONSUMER_UNICAST, accum)
+		assert.Nil(t, err)
+
+		start := time.Now()
+		var wg sync.WaitGroup
+		for i := 0; i < nwriters; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < numIters; j++ {
+					id := disruptor.NextMulti()
+					buffer[id&d] = j
+					disruptor.PublishMulti(id)
+				}
+
+			}()
+		}
+		go func() {
+			wg.Wait()
+			disruptor.Stop()
+		}()
+
+		disruptor.Start()
+
+		dur := time.Since(start)
+		fmt.Printf("average %.f inserts/s\n", float64(numIters)/dur.Seconds())
+		fmt.Printf("average %.f read/s\n", float64(numIters)/dur.Seconds())
 	})
 }
 
